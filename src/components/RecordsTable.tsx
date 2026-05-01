@@ -10,7 +10,7 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { deriveColumns } from '@/lib/fitMessages'
 import { inferInputType, parseInputValue } from '@/lib/inferInputType'
-import { getTransformer } from '@/lib/fieldTransformers'
+import { getTransformer, getTargetValueUnit } from '@/lib/fieldTransformers'
 import type { EditState } from '@/hooks/useEditState'
 
 interface Props {
@@ -30,12 +30,23 @@ function fallbackFormat(value: unknown): string {
   return String(value)
 }
 
+/** Merge original row with any edits to get current effective values */
+function effectiveRow(
+  original: Record<string, unknown>,
+  msgType: string,
+  rowIndex: number,
+  editState: EditState,
+): Record<string, unknown> {
+  const rowEdits = editState.edits[msgType]?.[rowIndex] ?? {}
+  return { ...original, ...rowEdits }
+}
+
 function EditableCell({
   messageKey,
   rowIndex,
   field,
   value,
-  row,
+  effRow,
   editState,
   isEditing,
   onStartEdit,
@@ -45,7 +56,7 @@ function EditableCell({
   rowIndex: number
   field: string
   value: unknown
-  row: Record<string, unknown>
+  effRow: Record<string, unknown>
   editState: EditState
   isEditing: boolean
   onStartEdit: () => void
@@ -53,20 +64,26 @@ function EditableCell({
 }) {
   const effective = editState.getEdited(messageKey, rowIndex, field, value)
   const dirty = editState.isDirty(messageKey, rowIndex, field)
-  const transformer = getTransformer(messageKey, field, row)
+  const transformer = getTransformer(messageKey, field, effRow)
   const isComplex = typeof value === 'object' && value !== null
 
   const displayValue = transformer
-    ? transformer.toDisplay(effective, row)
+    ? transformer.toDisplay(effective, effRow)
     : fallbackFormat(effective)
 
   const [draft, setDraft] = useState(displayValue)
 
-  function commit() {
+  // Derive dynamic unit for target value fields
+  const dynamicUnit =
+    (field === 'custom_target_value_low' || field === 'custom_target_value_high')
+      ? getTargetValueUnit(String(effRow['target_type'] ?? ''))
+      : transformer?.unit
+
+  function commit(val = draft) {
     if (isComplex) return
     const stored = transformer
-      ? transformer.toStored(draft, effective, row)
-      : parseInputValue(draft, value)
+      ? transformer.toStored(val, effective, effRow)
+      : parseInputValue(val, value)
     editState.setEdit(messageKey, rowIndex, field, stored)
     onEndEdit()
   }
@@ -74,6 +91,30 @@ function EditableCell({
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') { e.preventDefault(); commit() }
     if (e.key === 'Escape') { setDraft(displayValue); onEndEdit() }
+  }
+
+  // Select (enum dropdown) — always visible, no isEditing needed
+  if (transformer?.inputKind === 'select') {
+    return (
+      <select
+        value={fallbackFormat(effective)}
+        onChange={(e) => {
+          const stored = transformer.toStored(e.target.value, effective, effRow)
+          editState.setEdit(messageKey, rowIndex, field, stored)
+        }}
+        className={[
+          'text-xs bg-background border border-transparent rounded px-1 py-0.5',
+          'hover:border-border focus:border-primary focus:outline-none cursor-pointer',
+          dirty ? 'text-yellow-700 dark:text-yellow-400 font-medium' : '',
+        ].join(' ')}
+      >
+        {transformer.options?.map((opt) => (
+          <option key={String(opt.value)} value={String(opt.value)}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    )
   }
 
   if (isEditing && !isComplex) {
@@ -84,13 +125,13 @@ function EditableCell({
           type={transformer ? 'text' : inferInputType(value)}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
+          onBlur={() => commit()}
           onKeyDown={handleKeyDown}
           placeholder={transformer?.placeholder}
           className="w-full text-xs tabular-nums bg-background border border-primary rounded px-1 py-0.5 outline-none min-w-0"
         />
-        {transformer?.unit && (
-          <span className="text-xs text-muted-foreground shrink-0">{transformer.unit}</span>
+        {dynamicUnit && (
+          <span className="text-xs text-muted-foreground shrink-0">{dynamicUnit}</span>
         )}
       </div>
     )
@@ -106,8 +147,8 @@ function EditableCell({
       title={dirty ? `Modified (raw: ${fallbackFormat(effective)})` : undefined}
     >
       <span>{displayValue || <span className="text-muted-foreground/50">—</span>}</span>
-      {transformer?.unit && !dirty && (
-        <span className="text-muted-foreground/60">{transformer.unit}</span>
+      {dynamicUnit && !dirty && (
+        <span className="text-muted-foreground/60">{dynamicUnit}</span>
       )}
     </span>
   )
@@ -129,7 +170,6 @@ export function RecordsTable({ messageKey, messages, editState }: Props) {
       id: field,
       accessorFn: (row) => row[field],
       header: () => {
-        // Show unit hint in column header if any row has a transformer for this field
         const sampleRow = messages[0] ?? {}
         const t = getTransformer(messageKey, field, sampleRow)
         return (
@@ -139,19 +179,23 @@ export function RecordsTable({ messageKey, messages, editState }: Props) {
           </span>
         )
       },
-      cell: (info) => (
-        <EditableCell
-          messageKey={messageKey}
-          rowIndex={info.row.index}
-          field={field}
-          value={info.getValue()}
-          row={info.row.original}
-          editState={editState}
-          isEditing={editingCell?.rowIndex === info.row.index && editingCell?.field === field}
-          onStartEdit={() => startEdit(info.row.index, field)}
-          onEndEdit={endEdit}
-        />
-      ),
+      cell: (info) => {
+        const rowIndex = info.row.index
+        const effRow = effectiveRow(info.row.original, messageKey, rowIndex, editState)
+        return (
+          <EditableCell
+            messageKey={messageKey}
+            rowIndex={rowIndex}
+            field={field}
+            value={info.getValue()}
+            effRow={effRow}
+            editState={editState}
+            isEditing={editingCell?.rowIndex === rowIndex && editingCell?.field === field}
+            onStartEdit={() => startEdit(rowIndex, field)}
+            onEndEdit={endEdit}
+          />
+        )
+      },
     }))
   }, [messages, messageKey, editState, editingCell, startEdit, endEdit])
 
