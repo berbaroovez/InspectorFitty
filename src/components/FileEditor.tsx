@@ -20,7 +20,14 @@ export function FileEditor({ fileName, data, onReset }: Props) {
   const editState = useEditState()
 
   const selectedEntry = entries.find((e) => e.key === selected)
-  const messages = (data[selected as keyof ParsedFit] as Record<string, unknown>[] | undefined) ?? []
+
+  // Normalise to array regardless of whether source is array or plain object
+  const rawValue = data[selected as keyof ParsedFit]
+  const messages: Record<string, unknown>[] = Array.isArray(rawValue)
+    ? (rawValue as Record<string, unknown>[])
+    : rawValue !== null && rawValue !== undefined && typeof rawValue === 'object'
+      ? [rawValue as Record<string, unknown>]
+      : []
 
   return (
     <div className="flex h-screen flex-col">

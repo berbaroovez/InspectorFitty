@@ -38,31 +38,51 @@ export interface MessageTypeEntry {
   label: string
   count: number
   isSpreadsheet: boolean
+  /** true if the raw value is a plain object (not an array) */
+  isSingleObject: boolean
 }
+
+/** Primitive keys that are not message types */
+const SCALAR_KEYS = new Set(['protocolVersion', 'profileVersion'])
 
 export function getMessageTypeEntries(data: ParsedFit): MessageTypeEntry[] {
-  return Object.entries(data)
-    .filter(([, value]) => Array.isArray(value) && (value as unknown[]).length > 0)
-    .map(([key, value]) => ({
-      key,
-      label: messageLabel(key),
-      count: (value as unknown[]).length,
-      isSpreadsheet: SPREADSHEET_TYPES.has(key),
-    }))
-    .sort((a, b) => {
-      // records first, then alphabetical
-      if (a.key === 'records') return -1
-      if (b.key === 'records') return 1
-      return a.label.localeCompare(b.label)
-    })
+  const entries: MessageTypeEntry[] = []
+
+  for (const [key, value] of Object.entries(data)) {
+    if (SCALAR_KEYS.has(key) || value === null || value === undefined) continue
+
+    if (Array.isArray(value)) {
+      if ((value as unknown[]).length === 0) continue
+      entries.push({
+        key,
+        label: messageLabel(key),
+        count: (value as unknown[]).length,
+        isSpreadsheet: SPREADSHEET_TYPES.has(key),
+        isSingleObject: false,
+      })
+    } else if (typeof value === 'object') {
+      // Plain object — single message (e.g. workout, workout_step, file_creator)
+      entries.push({
+        key,
+        label: messageLabel(key),
+        count: 1,
+        isSpreadsheet: false,
+        isSingleObject: true,
+      })
+    }
+  }
+
+  return entries.sort((a, b) => {
+    if (a.key === 'records') return -1
+    if (b.key === 'records') return 1
+    return a.label.localeCompare(b.label)
+  })
 }
 
-/** Derive all unique field keys from an array of messages */
+/** Derive all unique field keys from an array of messages — scans ALL rows */
 export function deriveColumns(messages: Record<string, unknown>[]): string[] {
   const keys = new Set<string>()
-  // Sample up to 100 messages to derive columns (performance)
-  const sample = messages.length > 100 ? messages.slice(0, 100) : messages
-  for (const msg of sample) {
+  for (const msg of messages) {
     for (const key of Object.keys(msg)) {
       keys.add(key)
     }

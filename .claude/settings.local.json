@@ -16,7 +16,9 @@
       "Bash(npm run:*)",
       "Bash(git push:*)",
       "Bash(npm info:*)",
-      "Bash(curl -s http://localhost:5173)"
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(cat node_modules/fit-file-parser/examples/*.js)",
+      "Bash(python3 -m json.tool)"
     ]
   }
 }

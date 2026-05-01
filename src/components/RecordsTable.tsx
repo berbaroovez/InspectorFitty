@@ -10,6 +10,7 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { deriveColumns } from '@/lib/fitMessages'
 import { inferInputType, parseInputValue } from '@/lib/inferInputType'
+import { getTransformer } from '@/lib/fieldTransformers'
 import type { EditState } from '@/hooks/useEditState'
 
 interface Props {
@@ -23,7 +24,7 @@ interface CellId {
   field: string
 }
 
-function formatValue(value: unknown): string {
+function fallbackFormat(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
@@ -34,6 +35,7 @@ function EditableCell({
   rowIndex,
   field,
   value,
+  row,
   editState,
   isEditing,
   onStartEdit,
@@ -43,6 +45,7 @@ function EditableCell({
   rowIndex: number
   field: string
   value: unknown
+  row: Record<string, unknown>
   editState: EditState
   isEditing: boolean
   onStartEdit: () => void
@@ -50,31 +53,46 @@ function EditableCell({
 }) {
   const effective = editState.getEdited(messageKey, rowIndex, field, value)
   const dirty = editState.isDirty(messageKey, rowIndex, field)
-  const inputType = inferInputType(value)
-  const [draft, setDraft] = useState(formatValue(effective))
+  const transformer = getTransformer(messageKey, field, row)
+  const isComplex = typeof value === 'object' && value !== null
+
+  const displayValue = transformer
+    ? transformer.toDisplay(effective, row)
+    : fallbackFormat(effective)
+
+  const [draft, setDraft] = useState(displayValue)
 
   function commit() {
-    if (typeof value === 'object' && value !== null) return
-    editState.setEdit(messageKey, rowIndex, field, parseInputValue(draft, value))
+    if (isComplex) return
+    const stored = transformer
+      ? transformer.toStored(draft, effective, row)
+      : parseInputValue(draft, value)
+    editState.setEdit(messageKey, rowIndex, field, stored)
     onEndEdit()
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') { e.preventDefault(); commit() }
-    if (e.key === 'Escape') { setDraft(formatValue(effective)); onEndEdit() }
+    if (e.key === 'Escape') { setDraft(displayValue); onEndEdit() }
   }
 
-  if (isEditing && !(typeof value === 'object' && value !== null)) {
+  if (isEditing && !isComplex) {
     return (
-      <input
-        autoFocus
-        type={inputType}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={handleKeyDown}
-        className="w-full text-xs tabular-nums bg-background border border-primary rounded px-1 py-0.5 outline-none"
-      />
+      <div className="flex items-center gap-1">
+        <input
+          autoFocus
+          type={transformer ? 'text' : inferInputType(value)}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={handleKeyDown}
+          placeholder={transformer?.placeholder}
+          className="w-full text-xs tabular-nums bg-background border border-primary rounded px-1 py-0.5 outline-none min-w-0"
+        />
+        {transformer?.unit && (
+          <span className="text-xs text-muted-foreground shrink-0">{transformer.unit}</span>
+        )}
+      </div>
     )
   }
 
@@ -82,12 +100,15 @@ function EditableCell({
     <span
       onClick={onStartEdit}
       className={[
-        'block text-xs tabular-nums whitespace-nowrap cursor-text px-1 py-0.5 rounded hover:bg-muted/50 transition-colors',
+        'flex items-center gap-1 text-xs tabular-nums whitespace-nowrap cursor-text px-1 py-0.5 rounded hover:bg-muted/50 transition-colors',
         dirty ? 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 font-medium' : '',
       ].join(' ')}
-      title={dirty ? 'Modified' : undefined}
+      title={dirty ? `Modified (raw: ${fallbackFormat(effective)})` : undefined}
     >
-      {formatValue(effective) || <span className="text-muted-foreground/50">—</span>}
+      <span>{displayValue || <span className="text-muted-foreground/50">—</span>}</span>
+      {transformer?.unit && !dirty && (
+        <span className="text-muted-foreground/60">{transformer.unit}</span>
+      )}
     </span>
   )
 }
@@ -107,13 +128,24 @@ export function RecordsTable({ messageKey, messages, editState }: Props) {
     return deriveColumns(messages).map((field) => ({
       id: field,
       accessorFn: (row) => row[field],
-      header: field.replace(/_/g, ' '),
+      header: () => {
+        // Show unit hint in column header if any row has a transformer for this field
+        const sampleRow = messages[0] ?? {}
+        const t = getTransformer(messageKey, field, sampleRow)
+        return (
+          <span className="flex items-center gap-1">
+            <span>{field.replace(/_/g, ' ')}</span>
+            {t?.unit && <span className="text-muted-foreground/60 font-normal normal-case">({t.unit})</span>}
+          </span>
+        )
+      },
       cell: (info) => (
         <EditableCell
           messageKey={messageKey}
           rowIndex={info.row.index}
           field={field}
           value={info.getValue()}
+          row={info.row.original}
           editState={editState}
           isEditing={editingCell?.rowIndex === info.row.index && editingCell?.field === field}
           onStartEdit={() => startEdit(info.row.index, field)}
