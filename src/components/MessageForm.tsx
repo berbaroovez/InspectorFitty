@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { messageLabel } from '@/lib/fitMessages'
 import { inferInputType, parseInputValue } from '@/lib/inferInputType'
-import { getTransformer, getTargetValueUnit } from '@/lib/fieldTransformers'
+import { getTransformer, getTargetValueUnit, getTargetFieldLabel } from '@/lib/fieldTransformers'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import type { EditState } from '@/hooks/useEditState'
@@ -72,7 +72,9 @@ function FieldRow({
       dirty ? 'bg-yellow-500/5' : '',
     ].join(' ')}>
       <div className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
-        <span>{fieldKey.replace(/_/g, ' ')}</span>
+        <span>
+          {getTargetFieldLabel(fieldKey, String(effRow['target_type'] ?? '')) ?? fieldKey.replace(/_/g, ' ')}
+        </span>
         {dirty && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 shrink-0" title="Modified" />}
       </div>
       <div>

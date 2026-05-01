@@ -18,7 +18,10 @@
       "Bash(npm info:*)",
       "Bash(curl -s http://localhost:5173)",
       "Bash(cat node_modules/fit-file-parser/examples/*.js)",
-      "Bash(python3 -m json.tool)"
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:developer.garmin.com)",
+      "WebSearch",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

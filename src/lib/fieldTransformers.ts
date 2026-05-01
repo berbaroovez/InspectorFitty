@@ -1,13 +1,17 @@
 /**
  * Context-aware field transformers for workout_step and other message types.
  * Converts between raw FIT-stored values and human-friendly display/input.
+ *
+ * Per Garmin FIT spec: https://developer.garmin.com/fit/file-types/workout/
+ * target_value, custom_target_value_low/high are dynamic aliases whose semantic
+ * meaning (and unit) depends on the current target_type value.
  */
 
 export type InputKind = 'text' | 'number' | 'duration' | 'watts' | 'select'
 
 export interface SelectOption {
   label: string
-  value: unknown // the stored value (string after enum decode, or number)
+  value: unknown
 }
 
 export interface FieldTransformer {
@@ -16,7 +20,7 @@ export interface FieldTransformer {
   inputKind: InputKind
   unit?: string
   placeholder?: string
-  options?: SelectOption[] // only for inputKind === 'select'
+  options?: SelectOption[]
 }
 
 // ── Duration (milliseconds ↔ MM:SS or HH:MM:SS) ──────────────────────────────
@@ -53,10 +57,25 @@ const durationTransformer: FieldTransformer = {
   placeholder: '0:00',
 }
 
-// ── Power watts (stored as watts + 1000 offset) ───────────────────────────────
+// ── Power (stored as watts + 1000 offset per FIT spec) ────────────────────────
 
+function makePowerTransformer(): FieldTransformer {
+  return {
+    toDisplay: (raw) => {
+      const v = typeof raw === 'number' ? raw : Number(raw)
+      return isNaN(v) ? String(raw ?? '') : String(v - 1000)
+    },
+    toStored: (display, raw) => {
+      const n = Number(display)
+      return isNaN(n) ? raw : n + 1000
+    },
+    inputKind: 'watts',
+    unit: 'W',
+    placeholder: '0',
+  }
+}
 
-// ── Enum select transformers ──────────────────────────────────────────────────
+// ── Enum select helpers ───────────────────────────────────────────────────────
 
 function makeSelect(options: SelectOption[]): FieldTransformer {
   return {
@@ -67,92 +86,131 @@ function makeSelect(options: SelectOption[]): FieldTransformer {
   }
 }
 
-const TARGET_TYPE_OPTIONS: SelectOption[] = [
+// ── Enum option lists (exact strings from fit-file-parser / Garmin FIT SDK) ───
+
+/** wkt_step_target — per Garmin FIT spec */
+export const TARGET_TYPE_OPTIONS: SelectOption[] = [
   { label: 'Open (no target)', value: 'open' },
-  { label: 'Power (W)', value: 'power' },
-  { label: 'Power % FTP', value: 'power_percent_ftp' },
-  { label: 'Heart Rate (BPM)', value: 'heart_rate' },
-  { label: 'Cadence (RPM)', value: 'cadence' },
   { label: 'Speed', value: 'speed' },
-  { label: 'Grade (%)', value: 'grade' },
+  { label: 'Heart Rate', value: 'heart_rate' },
+  { label: 'Cadence', value: 'cadence' },
+  { label: 'Power', value: 'power' },
+  { label: 'Grade', value: 'grade' },
   { label: 'Resistance', value: 'resistance' },
-  { label: 'Reps', value: 'reps' },
-  { label: 'Power 3s Avg', value: 'power_3s_avg' },
-  { label: 'Power 10s Avg', value: 'power_10s_avg' },
-  { label: 'Power 30s Avg', value: 'power_30s_avg' },
-  { label: 'Power Lap Avg', value: 'power_lap_avg' },
 ]
 
-const DURATION_TYPE_OPTIONS: SelectOption[] = [
+/** wkt_step_duration — per Garmin FIT SDK */
+export const DURATION_TYPE_OPTIONS: SelectOption[] = [
   { label: 'Time', value: 'time' },
   { label: 'Distance', value: 'distance' },
   { label: 'Calories', value: 'calories' },
   { label: 'Open (lap button)', value: 'open' },
-  { label: 'HR < threshold', value: 'hr_less_than' },
-  { label: 'HR > threshold', value: 'hr_greater_than' },
-  { label: 'Power < threshold', value: 'power_less_than' },
-  { label: 'Power > threshold', value: 'power_greater_than' },
-  { label: 'Reps', value: 'reps' },
+  { label: 'HR less than', value: 'hr_less_than' },
+  { label: 'HR greater than', value: 'hr_greater_than' },
+  { label: 'Power less than', value: 'power_less_than' },
+  { label: 'Power greater than', value: 'power_greater_than' },
   { label: 'Repeat until steps complete', value: 'repeat_until_steps_cmplt' },
   { label: 'Repeat until time', value: 'repeat_until_time' },
   { label: 'Repeat until distance', value: 'repeat_until_distance' },
   { label: 'Repeat until calories', value: 'repeat_until_calories' },
+  { label: 'Repeat until HR <', value: 'repeat_until_hr_less_than' },
+  { label: 'Repeat until HR >', value: 'repeat_until_hr_greater_than' },
+  { label: 'Repeat until power <', value: 'repeat_until_power_less_than' },
+  { label: 'Repeat until power >', value: 'repeat_until_power_greater_than' },
 ]
 
-const INTENSITY_OPTIONS: SelectOption[] = [
+export const INTENSITY_OPTIONS: SelectOption[] = [
   { label: 'Active', value: 'active' },
   { label: 'Rest', value: 'rest' },
   { label: 'Warm Up', value: 'warmup' },
   { label: 'Cool Down', value: 'cooldown' },
 ]
 
-// ── Units for target value fields by target type ──────────────────────────────
+// ── Target value field metadata by target_type ────────────────────────────────
+// Maps target_type → { alias names, unit for custom_target_value_low/high }
 
-const TARGET_VALUE_UNIT: Record<string, string | undefined> = {
-  heart_rate: 'BPM',
-  cadence: 'RPM',
-  grade: '%',
-  power_percent_ftp: '% FTP',
+interface TargetMeta {
+  targetValueAlias: string   // human label for target_value field
+  lowAlias: string           // human label for custom_target_value_low
+  highAlias: string          // human label for custom_target_value_high
+  unit: string
+  isPower: boolean           // needs +1000 offset conversion
 }
 
-function targetValueTransformer(_field: 'low' | 'high'): FieldTransformer {
-  return {
-    toDisplay(raw, row) {
-      const targetType = String(row['target_type'] ?? '')
-      if (targetType === 'power') {
-        const v = typeof raw === 'number' ? raw : Number(raw)
-        return isNaN(v) ? String(raw ?? '') : String(v - 1000)
-      }
-      return String(raw ?? '')
-    },
-    toStored(display, raw, row) {
-      const targetType = String(row['target_type'] ?? '')
-      const n = Number(display)
-      if (isNaN(n)) return raw
-      if (targetType === 'power') return n + 1000
-      return n
-    },
-    get unit() {
-      // Dynamic — can't be a real getter in this context; handled in rendering
-      return undefined
-    },
-    inputKind: 'watts', // reused for number input; unit rendered separately
-    placeholder: '0',
-  }
+const TARGET_META: Record<string, TargetMeta> = {
+  speed: {
+    targetValueAlias: 'Target Speed Zone',
+    lowAlias: 'Custom Target Speed Low',
+    highAlias: 'Custom Target Speed High',
+    unit: 'm/s',
+    isPower: false,
+  },
+  heart_rate: {
+    targetValueAlias: 'Target HR Zone',
+    lowAlias: 'Custom Target Heart Rate Low',
+    highAlias: 'Custom Target Heart Rate High',
+    unit: 'BPM',
+    isPower: false,
+  },
+  open: {
+    targetValueAlias: 'Target Value',
+    lowAlias: 'Custom Target Value Low',
+    highAlias: 'Custom Target Value High',
+    unit: '',
+    isPower: false,
+  },
+  cadence: {
+    targetValueAlias: 'Target Cadence Zone',
+    lowAlias: 'Custom Target Cadence Low',
+    highAlias: 'Custom Target Cadence High',
+    unit: 'RPM',
+    isPower: false,
+  },
+  power: {
+    targetValueAlias: 'Target Power Zone',
+    lowAlias: 'Custom Target Power Low',
+    highAlias: 'Custom Target Power High',
+    unit: 'W',
+    isPower: true,
+  },
+  grade: {
+    targetValueAlias: 'Target Grade',
+    lowAlias: 'Custom Target Grade Low',
+    highAlias: 'Custom Target Grade High',
+    unit: '%',
+    isPower: false,
+  },
+  resistance: {
+    targetValueAlias: 'Target Resistance',
+    lowAlias: 'Custom Target Resistance Low',
+    highAlias: 'Custom Target Resistance High',
+    unit: '',
+    isPower: false,
+  },
+}
+
+export function getTargetMeta(targetType: string): TargetMeta {
+  return TARGET_META[targetType] ?? TARGET_META['open']!
 }
 
 export function getTargetValueUnit(targetType: string): string {
-  if (targetType === 'power') return 'W'
-  return TARGET_VALUE_UNIT[targetType] ?? ''
+  return getTargetMeta(targetType).unit
+}
+
+/**
+ * Returns the human-readable alias for target_value, custom_target_value_low,
+ * or custom_target_value_high given the current target_type.
+ */
+export function getTargetFieldLabel(field: string, targetType: string): string | null {
+  const meta = getTargetMeta(targetType)
+  if (field === 'target_value') return meta.targetValueAlias
+  if (field === 'custom_target_value_low') return meta.lowAlias
+  if (field === 'custom_target_value_high') return meta.highAlias
+  return null
 }
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 
-/**
- * Returns a transformer for the given field.
- * `row` should be the EFFECTIVE row (original merged with edits) so that
- * changing target_type immediately affects how custom_target_value_* renders.
- */
 export function getTransformer(
   msgType: string,
   field: string,
@@ -161,22 +219,20 @@ export function getTransformer(
   if (msgType === 'workout_step') {
     const durationType = String(row['duration_type'] ?? '')
     const targetType = String(row['target_type'] ?? '')
+    const meta = getTargetMeta(targetType)
 
     switch (field) {
-      case 'duration_type':
-        return makeSelect(DURATION_TYPE_OPTIONS)
-      case 'target_type':
-        return makeSelect(TARGET_TYPE_OPTIONS)
-      case 'intensity':
-        return makeSelect(INTENSITY_OPTIONS)
+      case 'duration_type':    return makeSelect(DURATION_TYPE_OPTIONS)
+      case 'target_type':      return makeSelect(TARGET_TYPE_OPTIONS)
+      case 'intensity':        return makeSelect(INTENSITY_OPTIONS)
       case 'duration_value':
         if (durationType === 'time') return durationTransformer
         break
+      case 'target_value':
       case 'custom_target_value_low':
-        if (targetType === 'power') return targetValueTransformer('low')
-        break
       case 'custom_target_value_high':
-        if (targetType === 'power') return targetValueTransformer('high')
+        if (meta.isPower) return makePowerTransformer()
+        // For open target_type, the value has no meaning — could hide or show as-is
         break
     }
   }

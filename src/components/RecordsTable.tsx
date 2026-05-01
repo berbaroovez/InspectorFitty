@@ -10,7 +10,7 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { deriveColumns } from '@/lib/fitMessages'
 import { inferInputType, parseInputValue } from '@/lib/inferInputType'
-import { getTransformer, getTargetValueUnit } from '@/lib/fieldTransformers'
+import { getTransformer, getTargetValueUnit, getTargetFieldLabel } from '@/lib/fieldTransformers'
 import type { EditState } from '@/hooks/useEditState'
 
 interface Props {
@@ -172,9 +172,11 @@ export function RecordsTable({ messageKey, messages, editState }: Props) {
       header: () => {
         const sampleRow = messages[0] ?? {}
         const t = getTransformer(messageKey, field, sampleRow)
+        const targetType = String(sampleRow['target_type'] ?? '')
+        const label = getTargetFieldLabel(field, targetType) ?? field.replace(/_/g, ' ')
         return (
           <span className="flex items-center gap-1">
-            <span>{field.replace(/_/g, ' ')}</span>
+            <span>{label}</span>
             {t?.unit && <span className="text-muted-foreground/60 font-normal normal-case">({t.unit})</span>}
           </span>
         )
