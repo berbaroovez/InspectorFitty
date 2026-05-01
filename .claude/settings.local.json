@@ -15,7 +15,8 @@
       "Bash(npx shadcn@latest:*)",
       "Bash(npm run:*)",
       "Bash(git push:*)",
-      "Bash(npm info:*)"
+      "Bash(npm info:*)",
+      "Bash(curl -s http://localhost:5173)"
     ]
   }
 }

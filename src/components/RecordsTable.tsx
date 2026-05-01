@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState, useCallback } from 'react'
 import {
   useReactTable,
   getCoreRowModel,
@@ -8,35 +8,120 @@ import {
   type ColumnDef,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useState } from 'react'
 import { deriveColumns } from '@/lib/fitMessages'
+import { inferInputType, parseInputValue } from '@/lib/inferInputType'
+import type { EditState } from '@/hooks/useEditState'
 
 interface Props {
+  messageKey: string
   messages: Record<string, unknown>[]
+  editState: EditState
+}
+
+interface CellId {
+  rowIndex: number
+  field: string
 }
 
 function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return '—'
+  if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
 
-export function RecordsTable({ messages }: Props) {
+function EditableCell({
+  messageKey,
+  rowIndex,
+  field,
+  value,
+  editState,
+  isEditing,
+  onStartEdit,
+  onEndEdit,
+}: {
+  messageKey: string
+  rowIndex: number
+  field: string
+  value: unknown
+  editState: EditState
+  isEditing: boolean
+  onStartEdit: () => void
+  onEndEdit: () => void
+}) {
+  const effective = editState.getEdited(messageKey, rowIndex, field, value)
+  const dirty = editState.isDirty(messageKey, rowIndex, field)
+  const inputType = inferInputType(value)
+  const [draft, setDraft] = useState(formatValue(effective))
+
+  function commit() {
+    if (typeof value === 'object' && value !== null) return
+    editState.setEdit(messageKey, rowIndex, field, parseInputValue(draft, value))
+    onEndEdit()
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') { e.preventDefault(); commit() }
+    if (e.key === 'Escape') { setDraft(formatValue(effective)); onEndEdit() }
+  }
+
+  if (isEditing && !(typeof value === 'object' && value !== null)) {
+    return (
+      <input
+        autoFocus
+        type={inputType}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={handleKeyDown}
+        className="w-full text-xs tabular-nums bg-background border border-primary rounded px-1 py-0.5 outline-none"
+      />
+    )
+  }
+
+  return (
+    <span
+      onClick={onStartEdit}
+      className={[
+        'block text-xs tabular-nums whitespace-nowrap cursor-text px-1 py-0.5 rounded hover:bg-muted/50 transition-colors',
+        dirty ? 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 font-medium' : '',
+      ].join(' ')}
+      title={dirty ? 'Modified' : undefined}
+    >
+      {formatValue(effective) || <span className="text-muted-foreground/50">—</span>}
+    </span>
+  )
+}
+
+export function RecordsTable({ messageKey, messages, editState }: Props) {
   const [sorting, setSorting] = useState<SortingState>([])
+  const [editingCell, setEditingCell] = useState<CellId | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
 
+  const startEdit = useCallback((rowIndex: number, field: string) => {
+    setEditingCell({ rowIndex, field })
+  }, [])
+
+  const endEdit = useCallback(() => setEditingCell(null), [])
+
   const columns = useMemo<ColumnDef<Record<string, unknown>>[]>(() => {
-    return deriveColumns(messages).map((key) => ({
-      id: key,
-      accessorFn: (row) => row[key],
-      header: key.replace(/_/g, ' '),
+    return deriveColumns(messages).map((field) => ({
+      id: field,
+      accessorFn: (row) => row[field],
+      header: field.replace(/_/g, ' '),
       cell: (info) => (
-        <span className="text-xs tabular-nums whitespace-nowrap">
-          {formatValue(info.getValue())}
-        </span>
+        <EditableCell
+          messageKey={messageKey}
+          rowIndex={info.row.index}
+          field={field}
+          value={info.getValue()}
+          editState={editState}
+          isEditing={editingCell?.rowIndex === info.row.index && editingCell?.field === field}
+          onStartEdit={() => startEdit(info.row.index, field)}
+          onEndEdit={endEdit}
+        />
       ),
     }))
-  }, [messages])
+  }, [messages, messageKey, editState, editingCell, startEdit, endEdit])
 
   const table = useReactTable({
     data: messages,
@@ -67,7 +152,7 @@ export function RecordsTable({ messages }: Props) {
   return (
     <div className="flex flex-col h-full">
       <div className="text-xs text-muted-foreground px-1 pb-2">
-        {messages.length.toLocaleString()} rows · {columns.length} fields
+        {messages.length.toLocaleString()} rows · {columns.length} fields · click any cell to edit
       </div>
       <div ref={parentRef} className="overflow-auto flex-1 rounded-lg border">
         <table className="text-sm border-collapse w-full">
@@ -89,24 +174,20 @@ export function RecordsTable({ messages }: Props) {
             ))}
           </thead>
           <tbody>
-            {paddingTop > 0 && (
-              <tr><td style={{ height: paddingTop }} /></tr>
-            )}
+            {paddingTop > 0 && <tr><td style={{ height: paddingTop }} /></tr>}
             {virtualRows.map((virtualRow) => {
               const row = rows[virtualRow.index]!
               return (
-                <tr key={row.id} className="hover:bg-muted/50 border-b last:border-b-0">
+                <tr key={row.id} className="hover:bg-muted/30 border-b last:border-b-0">
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-3 py-1.5 border-r last:border-r-0">
+                    <td key={cell.id} className="px-2 py-0.5 border-r last:border-r-0">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}
                 </tr>
               )
             })}
-            {paddingBottom > 0 && (
-              <tr><td style={{ height: paddingBottom }} /></tr>
-            )}
+            {paddingBottom > 0 && <tr><td style={{ height: paddingBottom }} /></tr>}
           </tbody>
         </table>
       </div>
