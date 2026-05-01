@@ -13,7 +13,9 @@
       "Bash(npx create-vite@latest . --template react-ts)",
       "Bash(npm install:*)",
       "Bash(npx shadcn@latest:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(git push:*)",
+      "Bash(npm info:*)"
     ]
   }
 }
