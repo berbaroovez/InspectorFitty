@@ -57,19 +57,16 @@ const durationTransformer: FieldTransformer = {
   placeholder: '0:00',
 }
 
-// ── Power (stored as watts + 1000 offset per FIT spec) ────────────────────────
+// ── Power (normalized to human watts at parse time; offset re-applied at export) ──
 
 function makePowerTransformer(): FieldTransformer {
   return {
-    toDisplay: (raw) => {
-      const v = typeof raw === 'number' ? raw : Number(raw)
-      return isNaN(v) ? String(raw ?? '') : String(v - 1000)
-    },
+    toDisplay: (raw) => String(raw ?? ''),
     toStored: (display, raw) => {
       const n = Number(display)
-      return isNaN(n) ? raw : n + 1000
+      return isNaN(n) ? raw : n
     },
-    inputKind: 'watts',
+    inputKind: 'number',
     unit: 'W',
     placeholder: '0',
   }

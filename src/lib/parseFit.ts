@@ -48,7 +48,30 @@ export async function parseFitFile(file: File): Promise<ParsedFit> {
     }
   }
 
+  normalizeWorkoutSteps(base)
   return base
+}
+
+/**
+ * Normalize workout_step power values from FIT binary encoding to human watts.
+ *
+ * FIT spec stores power targets as (watts + 1000) to avoid zero/invalid sentinel.
+ * We strip this offset at parse time so the data model and UI always deal with
+ * real watt values. The export layer adds 1000 back when writing the binary.
+ */
+function normalizeWorkoutSteps(data: ParsedFit) {
+  const steps = data['workout_step']
+  if (!Array.isArray(steps)) return
+
+  for (const step of steps as Record<string, unknown>[]) {
+    if (step['target_type'] !== 'power') continue
+    for (const field of ['target_value', 'custom_target_value_low', 'custom_target_value_high']) {
+      const v = step[field]
+      if (typeof v === 'number' && v >= 1000) {
+        step[field] = v - 1000
+      }
+    }
+  }
 }
 
 /** Returns all message type keys that have at least one entry */
