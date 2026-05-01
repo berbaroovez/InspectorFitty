@@ -1,9 +1,13 @@
 import { useFitFile } from '@/hooks/useFitFile'
 import { UploadZone } from '@/components/UploadZone'
-import { MessageOverview } from '@/components/MessageOverview'
+import { FileEditor } from '@/components/FileEditor'
 
 export default function App() {
   const { state, load, reset } = useFitFile()
+
+  if (state.status === 'ready') {
+    return <FileEditor fileName={state.fileName} data={state.data} onReset={reset} />
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -12,14 +16,13 @@ export default function App() {
       </header>
 
       <main className="flex flex-col items-center justify-center px-6 py-16">
-        {state.status === 'idle' && (
-          <div className="w-full max-w-lg">
-            <UploadZone onFile={load} />
+        {(state.status === 'idle' || state.status === 'parsing') && (
+          <div className="w-full max-w-lg space-y-4">
+            <UploadZone onFile={load} disabled={state.status === 'parsing'} />
+            {state.status === 'parsing' && (
+              <p className="text-center text-sm text-muted-foreground">Parsing file…</p>
+            )}
           </div>
-        )}
-
-        {state.status === 'parsing' && (
-          <div className="text-muted-foreground">Parsing file…</div>
         )}
 
         {state.status === 'error' && (
@@ -29,14 +32,6 @@ export default function App() {
             </div>
             <UploadZone onFile={load} />
           </div>
-        )}
-
-        {state.status === 'ready' && (
-          <MessageOverview
-            fileName={state.fileName}
-            data={state.data}
-            onReset={reset}
-          />
         )}
       </main>
     </div>
